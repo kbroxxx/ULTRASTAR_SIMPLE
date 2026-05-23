@@ -1,0 +1,28 @@
+# Binarios compilados
+*.exe
+
+# Herramientas de terceros (descargar por separado)
+mpv.exe
+ffmpeg.exe
+
+# Canciones (demasiado grandes, datos personales)
+songs/
+
+# Cache generada automáticamente
+songs_cache.txt
+cover_cache/
+
+# Datos de usuario
+favorites.txt
+card_size.txt
+
+# Logs y temporales
+*.log
+*.tmp
+
+# Videos sueltos en la raiz
+*.mp4
+*.mkv
+*.avi
+*.mp3
+*.wav
