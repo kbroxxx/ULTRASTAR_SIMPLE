@@ -49,8 +49,10 @@ public class UltraStarSimplificadoForm : Form
     private string songsRoot       = "";
     private string mpvPath         = "";
     private string pipeName    = "";
+    private string previewPipeName = "";
     private Process  mpv;
     private Process  previewMpv;
+    private DateTime previewFadeStarted;
     private bool  isFullscreen       = false;
     private int   currentPhraseIndex = -1;
     private Song  currentSong;
@@ -462,14 +464,35 @@ public class UltraStarSimplificadoForm : Form
             {
                 var p = line.Split('\t');
                 if (p.Length < 8) continue;
-                var s = new Song
+                Song s;
+                if (LooksLikePath(p[1]))
                 {
-                    TxtPath = p[0], Folder  = Path.GetDirectoryName(p[0]),
-                    Title   = p[1], Artist  = p[2], Year    = p[3],
-                    Genre   = p[4], Creator = p[5], Cover   = p[6], Media = p[7],
-                    Audio        = p.Length > 8 ? p[8] : "",
-                    Instrumental = p.Length > 9 ? p[9] : ""
-                };
+                    s = new Song
+                    {
+                        TxtPath = p[0], Folder = Path.GetDirectoryName(p[0]),
+                        Title = p.Length > 2 ? p[2] : "",
+                        Artist = p.Length > 3 ? p[3] : "",
+                        Year = p.Length > 4 ? p[4] : "",
+                        Genre = p.Length > 5 ? p[5] : "",
+                        Creator = p.Length > 6 ? p[6] : "",
+                        Cover = p.Length > 7 ? p[7] : "",
+                        Media = p.Length > 8 ? p[8] : "",
+                        Audio = p.Length > 9 ? p[9] : "",
+                        Instrumental = p.Length > 10 ? p[10] : ""
+                    };
+                }
+                else
+                {
+                    s = new Song
+                    {
+                        TxtPath = p[0], Folder  = Path.GetDirectoryName(p[0]),
+                        Title   = p[1], Artist  = p[2], Year    = p[3],
+                        Genre   = p[4], Creator = p[5], Cover   = p[6], Media = p[7],
+                        Audio        = p.Length > 8 ? p[8] : "",
+                        Instrumental = p.Length > 9 ? p[9] : ""
+                    };
+                }
+                SanitizeSong(s);
                 if (File.Exists(s.TxtPath) && s.Media.Length > 0) list.Add(s);
             }
             return list.Count > 0 ? list : null;
@@ -529,7 +552,34 @@ public class UltraStarSimplificadoForm : Form
         if (song.NormalizedAudio.Length        > 0) song.Audio        = song.NormalizedAudio;
         if (song.NormalizedInstrumental.Length > 0) song.Instrumental = song.NormalizedInstrumental;
         if (song.Media.Length == 0) song.Media = song.Audio;
+        SanitizeSong(song);
         return song.Media.Length == 0 ? null : song;
+    }
+
+    private void SanitizeSong(Song song)
+    {
+        song.Artist  = CleanDisplayText(song.Artist, "");
+        song.Title   = CleanDisplayText(song.Title, Path.GetFileNameWithoutExtension(song.TxtPath));
+        song.Year    = CleanDisplayText(song.Year, "");
+        song.Genre   = CleanDisplayText(song.Genre, "");
+        song.Creator = CleanDisplayText(song.Creator, "");
+    }
+
+    private string CleanDisplayText(string value, string fallback)
+    {
+        value = (value ?? "").Trim();
+        while (value.StartsWith(":", StringComparison.Ordinal)) value = value.Substring(1).Trim();
+        if (LooksLikePath(value)) value = "";
+        if (value.Length == 0) value = fallback ?? "";
+        return value.Trim();
+    }
+
+    private bool LooksLikePath(string value)
+    {
+        if (String.IsNullOrWhiteSpace(value)) return false;
+        if (value.Length >= 3 && Char.IsLetter(value[0]) && value[1] == ':' && (value[2] == '\\' || value[2] == '/')) return true;
+        if (value.StartsWith("\\\\", StringComparison.Ordinal)) return true;
+        return value.IndexOf("\\", StringComparison.Ordinal) >= 0 || value.IndexOf("/", StringComparison.Ordinal) >= 0;
     }
 
     private string GetThumbPath(Song song)
@@ -611,7 +661,10 @@ public class UltraStarSimplificadoForm : Form
         }
         var vSongs = new List<VGridSong>();
         foreach (var s in visibleSongs)
+        {
+            SanitizeSong(s);
             vSongs.Add(new VGridSong { TxtPath = s.TxtPath, Artist = s.Artist, Title = s.Title, ThumbPath = GetThumbPath(s) });
+        }
         vGrid.SetSongs(vSongs);
         songCountLabel.Text = visibleSongs.Count + " canciones";
     }
@@ -663,35 +716,51 @@ public class UltraStarSimplificadoForm : Form
         coverPreview.Visible = false;
 
         var logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "mpv_preview.log");
+        previewPipeName = "ultrastar_preview_" + Process.GetCurrentProcess().Id + "_" + DateTime.Now.Ticks;
 
         previewMpv = new Process();
         previewMpv.StartInfo.FileName  = mpvPath;
         // Mirror main-player argument style exactly — only differ in handle, file, volume, start
         previewMpv.StartInfo.Arguments =
             "--wid=" + previewPanel.Handle +
+            " --input-ipc-server=\"\\\\.\\pipe\\" + previewPipeName + "\"" +
             " --force-window=yes --no-terminal --vo=direct3d --hwdec=no" +
-            " --volume=35 --mute=no --loop-file=inf --ao=wasapi,dsound,win32" +
+            " --volume=20 --mute=no --loop-file=inf --ao=wasapi,dsound,win32" +
             " --start=40" +
             " --log-file=\"" + logFile + "\"" +
             " \"" + song.Media + "\"";
         previewMpv.StartInfo.UseShellExecute  = false;
         previewMpv.StartInfo.CreateNoWindow   = true;
         previewMpv.StartInfo.WorkingDirectory = song.Folder;
-        try { previewMpv.Start(); }
-        catch { previewMpv = null; coverPreview.Visible = true; }
+        try
+        {
+            previewFadeStarted = DateTime.Now;
+            previewMpv.Start();
+            WaitForPipe(previewPipeName, 700);
+            previewFadeTimer.Start();
+        }
+        catch { previewMpv = null; previewPipeName = ""; coverPreview.Visible = true; }
     }
 
     private void FadePreviewVolume()
     {
-        // No-op: preview now starts mpv directly with the file (no IPC needed)
-        previewFadeTimer.Stop();
+        if (previewMpv == null || previewMpv.HasExited || String.IsNullOrEmpty(previewPipeName))
+        {
+            previewFadeTimer.Stop();
+            return;
+        }
+        var elapsed = (DateTime.Now - previewFadeStarted).TotalMilliseconds;
+        var progress = Math.Max(0, Math.Min(1, elapsed / 1200.0));
+        var volume = 20 + (int)Math.Round(50 * progress);
+        SendMpvToPipe(previewPipeName, "{\"command\":[\"set_property\",\"volume\"," + volume.ToString(CultureInfo.InvariantCulture) + "]}");
+        if (progress >= 1) previewFadeTimer.Stop();
     }
 
     private void StopPreviewMpv()
     {
         previewFadeTimer.Stop(); previewDebounceTimer.Stop();
         try { if (previewMpv != null && !previewMpv.HasExited) previewMpv.Kill(); } catch { }
-        previewMpv = null; pendingPreviewSong = null;
+        previewMpv = null; previewPipeName = ""; pendingPreviewSong = null;
         coverPreview.Visible = true; // restore cover art placeholder
     }
 
@@ -1187,16 +1256,8 @@ public class VirtualSongGrid : Panel
         // Row 2: SONG TITLE — always here, never substituted by path
         var artistText = song.Artist.ToUpperInvariant();
         var titleText  = song.Title;
-        if (artistText.Length > 0)
-        {
-            g.DrawString(artistText, _artistFont, _whiteBrush, new RectangleF(x + 8, y + _coverS + 10, CardW - 16, 28), _labelFmt);
-            g.DrawString(titleText,  _titleFont,  _whiteBrush, new RectangleF(x + 8, y + _coverS + 38, CardW - 16, 30), _labelFmt);
-        }
-        else
-        {
-            // No artist: center title vertically in the text area
-            g.DrawString(titleText, _artistFont, _whiteBrush, new RectangleF(x + 8, y + _coverS + 18, CardW - 16, 50), _labelFmt);
-        }
+        g.DrawString(artistText, _artistFont, _whiteBrush, new RectangleF(x + 8, y + _coverS + 10, CardW - 16, 28), _labelFmt);
+        g.DrawString(titleText,  _titleFont,  _whiteBrush, new RectangleF(x + 8, y + _coverS + 38, CardW - 16, 30), _labelFmt);
     }
 
     private void DrawRainbowBorder(Graphics g, int x, int y)
