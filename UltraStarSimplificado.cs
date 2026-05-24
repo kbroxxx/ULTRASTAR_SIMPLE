@@ -12,7 +12,7 @@ using System.Windows.Forms;
 
 public class UltraStarSimplificadoForm : Form
 {
-    private const string AppVersion = "v1.0";
+    private const string AppVersion = "v2.7";
 
     private readonly TextBox         searchBox        = new TextBox();
     private          VirtualSongGrid vGrid;
@@ -31,9 +31,16 @@ public class UltraStarSimplificadoForm : Form
     private readonly Panel           lyricsOverlay    = new Panel();
     private readonly Panel           pitchOverlay     = new Panel();
     private readonly Panel           vocalOverlay     = new Panel();
+    private readonly Panel           volumeOverlay    = new Panel();
     private readonly Label           versionLabel     = new Label();
     private readonly TrackBar        pitchBar         = new TrackBar();
     private readonly TrackBar        vocalBar         = new TrackBar();
+    private readonly TrackBar        volumeBar        = new TrackBar();
+    private readonly Button          settingsBtn      = new Button();
+    private          bool            settingsVisible  = false;
+    private readonly Label           lblPitchVal      = new Label();
+    private readonly Label           lblVolumeVal     = new Label();
+    private readonly Label           lblVocalVal      = new Label();
     private readonly Button          favFilterBtn     = new Button();
     private readonly Button          rescanBtn        = new Button();
     private readonly Button          sizePlusBtn      = new Button();
@@ -52,7 +59,6 @@ public class UltraStarSimplificadoForm : Form
     private string previewPipeName = "";
     private Process  mpv;
     private Process  previewMpv;
-    private DateTime previewFadeStarted;
     private bool  isFullscreen       = false;
     private int   currentPhraseIndex = -1;
     private Song  currentSong;
@@ -210,16 +216,54 @@ public class UltraStarSimplificadoForm : Form
         nextLine.BackColor = Color.FromArgb(12, 12, 14);
         lyricsOverlay.Controls.Add(nextLine);
 
-        SetupSliderOverlay(pitchOverlay, "Tono",    pitchBar, -12, 12,  0);
-        SetupSliderOverlay(vocalOverlay, "Karaoke", vocalBar,   0, 100, 0);
+        SetupSliderOverlay(pitchOverlay,  "Tono",    lblPitchVal,  pitchBar,  -12, 12,   0);
+        SetupSliderOverlay(volumeOverlay, "Volumen",  lblVolumeVal, volumeBar,   0, 100,  75);
+        SetupSliderOverlay(vocalOverlay,  "Karaoke",  lblVocalVal,  vocalBar,    0, 100,   0);
+
+        // Botón configuración (⚙)
+        settingsBtn.Text      = "⚙";
+        settingsBtn.Font      = new Font("Segoe UI", 14);
+        settingsBtn.ForeColor = Color.FromArgb(200, 200, 220);
+        settingsBtn.BackColor = Color.FromArgb(30, 20, 50);
+        settingsBtn.FlatStyle = FlatStyle.Flat;
+        settingsBtn.FlatAppearance.BorderColor = Color.FromArgb(80, 0, 140);
+        settingsBtn.FlatAppearance.BorderSize  = 1;
+        settingsBtn.Width     = 38; settingsBtn.Height = 38;
+        settingsBtn.Cursor    = Cursors.Hand;
+        settingsBtn.Click    += delegate
+        {
+            settingsVisible   = !settingsVisible;
+            pitchOverlay.Visible  = settingsVisible;
+            volumeOverlay.Visible = settingsVisible;
+            vocalOverlay.Visible  = settingsVisible;
+            settingsBtn.BackColor = settingsVisible
+                ? Color.FromArgb(100, 0, 170)
+                : Color.FromArgb(30, 20, 50);
+            LayoutSliderOverlays();
+        };
+        playerPanel.Controls.Add(settingsBtn);
+
         playerPanel.Controls.Add(pitchOverlay);
+        playerPanel.Controls.Add(volumeOverlay);
         playerPanel.Controls.Add(vocalOverlay);
+        pitchOverlay.Visible  = false;
+        volumeOverlay.Visible = false;
+        vocalOverlay.Visible  = false;
         pitchOverlay.BringToFront();
+        volumeOverlay.BringToFront();
         vocalOverlay.BringToFront();
+        settingsBtn.BringToFront();
         LayoutSliderOverlays();
         playerPanel.Resize        += delegate { LayoutSliderOverlays(); };
-        pitchBar.ValueChanged     += delegate { ApplyAudioFilters(); };
-        vocalBar.ValueChanged     += delegate { ApplyAudioFilters(); };
+        pitchBar.ValueChanged  += delegate { ApplyAudioFilters(); UpdateSliderValues(); };
+        vocalBar.ValueChanged  += delegate { ApplyAudioFilters(); UpdateSliderValues(); };
+        volumeBar.ValueChanged += delegate
+        {
+            if (!String.IsNullOrEmpty(pipeName))
+                SendMpv("{\"command\":[\"set_property\",\"volume\"," + volumeBar.Value.ToString(CultureInfo.InvariantCulture) + "]}");
+            UpdateSliderValues();
+        };
+        UpdateSliderValues();
 
         // Loading panel
         loadingPanel.Dock      = DockStyle.Fill;
@@ -264,8 +308,8 @@ public class UltraStarSimplificadoForm : Form
         previewFadeTimer.Interval = 90;
         previewFadeTimer.Tick    += delegate { FadePreviewVolume(); };
 
-        previewDebounceTimer.Interval = 250;
-        previewDebounceTimer.Tick    += delegate { previewDebounceTimer.Stop(); StartPreviewMpv(pendingPreviewSong); };
+        previewDebounceTimer.Interval = 300;
+        previewDebounceTimer.Tick    += delegate { previewDebounceTimer.Stop(); UpdatePreviewMpv(pendingPreviewSong); };
 
         FormClosing += OnFormClosing;
         KeyDown     += HandleKeys;
@@ -310,52 +354,106 @@ public class UltraStarSimplificadoForm : Form
         }
     }
 
-    private Label MakeLabel(string text, int left)
+    private Label MakeLabel(string text, int left, int top, int height, float fontSize)
     {
-        return new Label { Text = text, Left = left, Top = 11, Width = 72, Height = 24,
-            ForeColor = Color.White, BackColor = Color.FromArgb(16, 16, 20) };
+        return new Label { Text = text, Left = left, Top = top, Width = 60, Height = height,
+            ForeColor = Color.FromArgb(170, 170, 190), BackColor = Color.Transparent,
+            Font = new Font("Segoe UI", fontSize) };
     }
 
     private void SetupBar(TrackBar bar, int min, int max, int value, int left, Control parent)
     {
-        bar.Left = left; bar.Top = 3; bar.Width = 210; bar.Height = 42;
+        bar.Left = left; bar.Top = 8; bar.Width = parent.Width - left - 4; bar.Height = 38;
         bar.Minimum = min; bar.Maximum = max; bar.Value = value;
         bar.SmallChange = 1; bar.LargeChange = 2;
-        bar.TickFrequency = min < 0 ? 1 : 10;
+        bar.TickStyle = System.Windows.Forms.TickStyle.None;
         parent.Controls.Add(bar);
     }
 
-    private void SetupSliderOverlay(Panel panel, string label, TrackBar bar, int min, int max, int value)
+    private void SetupSliderOverlay(Panel panel, string name, Label valLbl, TrackBar bar, int min, int max, int value)
     {
-        panel.Width = 310; panel.Height = 48;
+        panel.Width = 200; panel.Height = 50;
         panel.Anchor    = AnchorStyles.Top | AnchorStyles.Left;
-        panel.BackColor = Color.FromArgb(16, 16, 20);
+        panel.BackColor = Color.FromArgb(18, 18, 24);
+        panel.Region    = RoundedRegion(panel.Width, panel.Height, 9);
         panel.Paint    += PaintSliderOverlay;
-        panel.Controls.Add(MakeLabel(label, 14));
-        SetupBar(bar, min, max, value, 84, panel);
+        // Etiqueta nombre (arriba)
+        panel.Controls.Add(MakeLabel(name, 6, 7, 14, 8f));
+        // Etiqueta valor (abajo, grande)
+        valLbl.Left = 6; valLbl.Top = 20; valLbl.Width = 60; valLbl.Height = 20;
+        valLbl.BackColor = Color.Transparent;
+        valLbl.Font      = new Font("Segoe UI", 10f, FontStyle.Bold);
+        valLbl.TextAlign = ContentAlignment.MiddleLeft;
+        panel.Controls.Add(valLbl);
+        SetupBar(bar, min, max, value, 68, panel);
+    }
+
+    private void UpdateSliderValues()
+    {
+        // Tono: mostrar con signo
+        var pv = pitchBar.Value;
+        lblPitchVal.Text      = pv > 0 ? "+" + pv : pv.ToString();
+        lblPitchVal.ForeColor = pv == 0 ? Color.FromArgb(100,100,120) : Color.FromArgb(255,210,60);
+        // Volumen: directo
+        var vv = volumeBar.Value;
+        lblVolumeVal.Text      = vv.ToString();
+        lblVolumeVal.ForeColor = vv == 75 ? Color.FromArgb(100,100,120) : Color.FromArgb(255,210,60);
+        // Karaoke: 100 = voz completa, disminuye al mover
+        var kv = 100 - vocalBar.Value;
+        lblVocalVal.Text      = kv.ToString();
+        lblVocalVal.ForeColor = kv == 100 ? Color.FromArgb(100,100,120) : Color.FromArgb(255,210,60);
+        pitchOverlay.Invalidate(); volumeOverlay.Invalidate(); vocalOverlay.Invalidate();
+    }
+
+    private static Region RoundedRegion(int w, int h, int r)
+    {
+        var path = new GraphicsPath();
+        path.AddArc(0,     0,     r*2, r*2, 180, 90);
+        path.AddArc(w-r*2, 0,     r*2, r*2, 270, 90);
+        path.AddArc(w-r*2, h-r*2, r*2, r*2,   0, 90);
+        path.AddArc(0,     h-r*2, r*2, r*2,  90, 90);
+        path.CloseAllFigures();
+        return new Region(path);
     }
 
     private void PaintSliderOverlay(object sender, PaintEventArgs e)
     {
-        using (var pen = new Pen(Color.FromArgb(255, 0, 170), 2))
+        var panel = sender as Panel;
+        // Franja superior (y=0..5): marcador rojo de posición inicial
+        using (var pen = new Pen(Color.FromArgb(210, 40, 40), 3))
         {
-            var panel = sender as Panel;
-            if      (panel == pitchOverlay) DrawZeroMarker(e.Graphics, pitchBar, -12, 12,  pen);
-            else if (panel == vocalOverlay) DrawZeroMarker(e.Graphics, vocalBar,   0, 100, pen);
+            if      (panel == pitchOverlay)  DrawInitialMarker(e.Graphics, pitchBar,  -12, 12,   0, pen);
+            else if (panel == volumeOverlay) DrawInitialMarker(e.Graphics, volumeBar,   0, 100,  75, pen);
+            else if (panel == vocalOverlay)  DrawInitialMarker(e.Graphics, vocalBar,    0, 100,   0, pen);
         }
     }
 
-    private void DrawZeroMarker(Graphics g, TrackBar bar, int min, int max, Pen pen)
+    // Dibuja la línea roja en la franja superior (y=1..6), siempre visible sobre el TrackBar
+    private void DrawInitialMarker(Graphics g, TrackBar bar, int min, int max, int initial, Pen pen)
     {
-        var x = bar.Left + 16 + (int)((bar.Width - 32) * (0.0 - min) / (max - min));
-        g.DrawLine(pen, x, bar.Top + 4, x, bar.Top + bar.Height - 7);
+        var x = bar.Left + 13 + (int)((bar.Width - 26) * (double)(initial - min) / (max - min));
+        g.DrawLine(pen, x, 1, x, 6);
     }
 
     private void LayoutSliderOverlays()
     {
-        pitchOverlay.Left = 18; pitchOverlay.Top = 18;
-        vocalOverlay.Left = Math.Max(18, playerPanel.ClientSize.Width - vocalOverlay.Width - 18);
-        vocalOverlay.Top  = 18;
+        // Botón ⚙ siempre en la esquina superior derecha del playerPanel
+        settingsBtn.Left = playerPanel.ClientSize.Width  - settingsBtn.Width  - 12;
+        settingsBtn.Top  = 12;
+
+        if (!settingsVisible) return;
+
+        // Los 3 sliders centrados, dejando espacio al botón ⚙ a la derecha
+        int availableW = playerPanel.ClientSize.Width - settingsBtn.Width - 28;
+        int totalW     = pitchOverlay.Width + volumeOverlay.Width + vocalOverlay.Width + 40;
+        int startX     = Math.Max(8, (availableW - totalW) / 2);
+        int sliderY    = 14;
+        pitchOverlay.Left   = startX;
+        pitchOverlay.Top    = sliderY;
+        volumeOverlay.Left  = startX + pitchOverlay.Width + 20;
+        volumeOverlay.Top   = sliderY;
+        vocalOverlay.Left   = startX + pitchOverlay.Width + 20 + volumeOverlay.Width + 20;
+        vocalOverlay.Top    = sliderY;
     }
 
     private void LayoutVideoPanel() { videoPanel.Bounds = playerPanel.ClientRectangle; }
@@ -446,7 +544,12 @@ public class UltraStarSimplificadoForm : Form
         Application.DoEvents();
 
         var cached = LoadFromCache();
-        if (cached != null) { songs.Clear(); songs.AddRange(cached); }
+        if (cached != null)
+        {
+            songs.Clear();
+            songs.AddRange(cached);
+            songs.Sort((a, b) => String.Compare(a.DisplayName, b.DisplayName, StringComparison.CurrentCultureIgnoreCase));
+        }
         else ScanSongs();
 
         loadingPanel.Visible = false;
@@ -569,17 +672,30 @@ public class UltraStarSimplificadoForm : Form
     {
         value = (value ?? "").Trim();
         while (value.StartsWith(":", StringComparison.Ordinal)) value = value.Substring(1).Trim();
-        if (LooksLikePath(value)) value = "";
+        // Solo borrar si es claramente una ruta absoluta (C:\... o \\...)
+        // No borrar por / o \ sueltos — artistas como AC/DC son válidos
+        if (IsAbsolutePath(value)) value = "";
         if (value.Length == 0) value = fallback ?? "";
         return value.Trim();
+    }
+
+    private bool IsAbsolutePath(string value)
+    {
+        if (String.IsNullOrWhiteSpace(value)) return false;
+        if (value.Length >= 3 && Char.IsLetter(value[0]) && value[1] == ':') return true;
+        if (value.StartsWith("\\\\", StringComparison.Ordinal)) return true;
+        return false;
     }
 
     private bool LooksLikePath(string value)
     {
         if (String.IsNullOrWhiteSpace(value)) return false;
+        // Ruta absoluta: C:\ o C:/
         if (value.Length >= 3 && Char.IsLetter(value[0]) && value[1] == ':' && (value[2] == '\\' || value[2] == '/')) return true;
+        // Ruta UNC: \\
         if (value.StartsWith("\\\\", StringComparison.Ordinal)) return true;
-        return value.IndexOf("\\", StringComparison.Ordinal) >= 0 || value.IndexOf("/", StringComparison.Ordinal) >= 0;
+        // Sólo barra invertida indica ruta relativa (no / porque AC/DC, N/A, etc. son válidos)
+        return value.IndexOf("\\", StringComparison.Ordinal) >= 0;
     }
 
     private string GetThumbPath(Song song)
@@ -698,19 +814,24 @@ public class UltraStarSimplificadoForm : Form
         previewDebounceTimer.Start();
     }
 
-    private void StartPreviewMpv(Song song)
+    // Actualiza el preview matando la instancia anterior e iniciando una nueva de forma asíncrona.
+    // Esto es mucho más robusto que IPC loadfile ya que evita problemas de compatibilidad y asegura 
+    // que la transición entre canciones de la grilla sea inmediata y confiable en cualquier PC.
+    private void UpdatePreviewMpv(Song song)
     {
         if (playerPanel.Visible || song == null) return;
         if (mpvPath.Length == 0 || !File.Exists(mpvPath) || song.Media.Length == 0) return;
 
-        // Kill any running preview instance first
-        try { if (previewMpv != null && !previewMpv.HasExited) previewMpv.Kill(); } catch { }
-        previewMpv = null;
+        KillPreviewNow();
+        StartFreshPreviewMpv(song);
+    }
 
-        // Ensure the panel HWND is fully created and rendered before passing to mpv
+    private void StartFreshPreviewMpv(Song song)
+    {
+        // Asegurar que el panel tenga handle antes de pasarlo a mpv
         previewPanel.CreateControl();
         previewPanel.Update();
-        Application.DoEvents();   // flush pending messages so the window is real
+        // NO Application.DoEvents() — causa re-entrancia y preview pegado
 
         // Hide cover art — mpv paints directly onto previewPanel via --wid
         coverPreview.Visible = false;
@@ -720,13 +841,15 @@ public class UltraStarSimplificadoForm : Form
 
         previewMpv = new Process();
         previewMpv.StartInfo.FileName  = mpvPath;
-        // Mirror main-player argument style exactly — only differ in handle, file, volume, start
+        var previewAudioArg = song.Audio.Length > 0 && song.Audio != song.Media ? " --audio-file=\"" + song.Audio + "\"" : "";
         previewMpv.StartInfo.Arguments =
             "--wid=" + previewPanel.Handle +
             " --input-ipc-server=\"\\\\.\\pipe\\" + previewPipeName + "\"" +
             " --force-window=yes --no-terminal --vo=direct3d --hwdec=no" +
-            " --volume=20 --mute=no --loop-file=inf --ao=wasapi,dsound,win32" +
+            " --volume=75 --mute=no --loop-file=inf --ao=wasapi,dsound,win32 --audio-exclusive=no" +
+            " --panscan=1.0 --video-zoom=0.08" +
             " --start=40" +
+            previewAudioArg +
             " --log-file=\"" + logFile + "\"" +
             " \"" + song.Media + "\"";
         previewMpv.StartInfo.UseShellExecute  = false;
@@ -734,33 +857,36 @@ public class UltraStarSimplificadoForm : Form
         previewMpv.StartInfo.WorkingDirectory = song.Folder;
         try
         {
-            previewFadeStarted = DateTime.Now;
             previewMpv.Start();
-            WaitForPipe(previewPipeName, 700);
-            previewFadeTimer.Start();
         }
         catch { previewMpv = null; previewPipeName = ""; coverPreview.Visible = true; }
     }
 
     private void FadePreviewVolume()
     {
-        if (previewMpv == null || previewMpv.HasExited || String.IsNullOrEmpty(previewPipeName))
+        // Fade desactivado — volumen fijo configurado directamente en argumentos de mpv
+        previewFadeTimer.Stop();
+    }
+
+    // Mata el proceso preview SIN bloquear el hilo de UI (no WaitForExit)
+    private void KillPreviewNow()
+    {
+        previewDebounceTimer.Stop();
+        try
         {
-            previewFadeTimer.Stop();
-            return;
+            if (previewMpv != null && !previewMpv.HasExited)
+            {
+                previewMpv.Kill();
+            }
         }
-        var elapsed = (DateTime.Now - previewFadeStarted).TotalMilliseconds;
-        var progress = Math.Max(0, Math.Min(1, elapsed / 1200.0));
-        var volume = 20 + (int)Math.Round(50 * progress);
-        SendMpvToPipe(previewPipeName, "{\"command\":[\"set_property\",\"volume\"," + volume.ToString(CultureInfo.InvariantCulture) + "]}");
-        if (progress >= 1) previewFadeTimer.Stop();
+        catch { }
+        previewMpv = null; previewPipeName = "";
     }
 
     private void StopPreviewMpv()
     {
-        previewFadeTimer.Stop(); previewDebounceTimer.Stop();
-        try { if (previewMpv != null && !previewMpv.HasExited) previewMpv.Kill(); } catch { }
-        previewMpv = null; previewPipeName = ""; pendingPreviewSong = null;
+        KillPreviewNow();
+        pendingPreviewSong = null;
         coverPreview.Visible = true; // restore cover art placeholder
     }
 
@@ -779,13 +905,21 @@ public class UltraStarSimplificadoForm : Form
         playerPanel.BringToFront();
         LayoutVideoPanel(); LayoutSliderOverlays();
         videoPanel.SendToBack();
-        lyricsOverlay.BringToFront(); pitchOverlay.BringToFront(); vocalOverlay.BringToFront();
+        // Ocultar sliders al iniciar canción; solo el botón ⚙ queda visible
+        settingsVisible       = false;
+        pitchOverlay.Visible  = false;
+        volumeOverlay.Visible = false;
+        vocalOverlay.Visible  = false;
+        settingsBtn.BackColor = Color.FromArgb(30, 20, 50);
+        settingsBtn.BringToFront();
+        lyricsOverlay.BringToFront();
         lyricLine.TextToShow   = "";
         lyricLine.BallProgress = -1;
         nextLine.TextToShow    = song.DisplayName;
         nextLine.Invalidate();
         currentPhraseIndex = -1;
-        pitchBar.Value = 0; vocalBar.Value = 0;
+        pitchBar.Value = 0; vocalBar.Value = 0; volumeBar.Value = 75;
+        UpdateSliderValues();
         videoPanel.CreateControl(); videoPanel.Update();
         Application.DoEvents();
 
@@ -798,7 +932,7 @@ public class UltraStarSimplificadoForm : Form
         mpv.StartInfo.Arguments       = "--wid=" + videoPanel.Handle +
             " --input-ipc-server=\"\\\\.\\pipe\\" + pipeName +
             "\" --force-window=yes --no-terminal --vo=direct3d --hwdec=no --volume=100 --mute=no" +
-            " --ao=wasapi,dsound,win32 --log-file=\"" + logFile + "\"" + audioArg + " \"" + song.Media + "\"";
+            " --ao=wasapi,dsound,win32 --audio-exclusive=no --log-file=\"" + logFile + "\"" + audioArg + " \"" + song.Media + "\"";
         mpv.StartInfo.UseShellExecute  = false;
         mpv.StartInfo.CreateNoWindow   = true;
         mpv.StartInfo.WorkingDirectory = song.Folder;
@@ -806,12 +940,26 @@ public class UltraStarSimplificadoForm : Form
         timer.Start();
     }
 
-    private void ShowSongGrid() { StopMpv(); playerPanel.Visible = false; }
+    private void ShowSongGrid()
+    {
+        StopMpv();
+        playerPanel.Visible = false;
+        // Limpiar estado del preview para que arranque limpio
+        previewMpv = null; previewPipeName = "";
+        coverPreview.Visible = true;
+    }
 
     private void StopMpv()
     {
         timer.Stop();
-        try { if (mpv != null && !mpv.HasExited) mpv.Kill(); } catch { }
+        try
+        {
+            if (mpv != null && !mpv.HasExited)
+            {
+                mpv.Kill();
+            }
+        }
+        catch { }
         mpv = null; pipeName = "";
     }
 
@@ -960,18 +1108,20 @@ public class UltraStarSimplificadoForm : Form
 
     private void SendMpv(string json) { SendMpvToPipe(pipeName, json); }
 
-    private void SendMpvToPipe(string targetPipe, string json)
+    // Retorna true si el comando se envió con éxito
+    private bool SendMpvToPipe(string targetPipe, string json)
     {
         try
         {
             using (var pipe = new NamedPipeClientStream(".", targetPipe, PipeDirection.Out))
             {
-                pipe.Connect(180);
+                pipe.Connect(400);
                 var bytes = Encoding.UTF8.GetBytes(json + "\n");
                 pipe.Write(bytes, 0, bytes.Length);
+                return true;
             }
         }
-        catch { }
+        catch { return false; }
     }
 
     private void WaitForPipe(string targetPipe, int timeoutMs)
@@ -997,7 +1147,13 @@ public class UltraStarSimplificadoForm : Form
         }
         if (e.KeyCode == Keys.F11)    { ToggleFullscreen(); e.Handled = true; return; }
         if (e.KeyCode == Keys.Space && playerPanel.Visible) { SendMpv("{\"command\":[\"cycle\",\"pause\"]}"); e.Handled = true; return; }
-        if (!playerPanel.Visible) vGrid.HandleKey(e.KeyCode);
+        if (!playerPanel.Visible)
+        {
+            if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down ||
+                e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
+            { /* preview se actualiza via loadfile en el debounce, sin matar mpv */ }
+            vGrid.HandleKey(e.KeyCode);
+        }
     }
 
     private void SearchBoxKeyDown(object sender, KeyEventArgs e)
@@ -1005,7 +1161,9 @@ public class UltraStarSimplificadoForm : Form
         if (playerPanel.Visible) { e.Handled = true; e.SuppressKeyPress = true; return; }
         if (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down ||
             e.KeyCode == Keys.Left || e.KeyCode == Keys.Right || e.KeyCode == Keys.Enter)
-        { vGrid.HandleKey(e.KeyCode); e.Handled = true; e.SuppressKeyPress = true; }
+        {
+            vGrid.HandleKey(e.KeyCode); e.Handled = true; e.SuppressKeyPress = true;
+        }
     }
 
     private void ToggleFullscreen()
